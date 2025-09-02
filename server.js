@@ -1,51 +1,55 @@
-const express = require("express");
-const multer = require("multer");
-const { exec } = require("child_process");
-const fs = require("fs");
-const path = require("path");
+import express from "express";
+import cors from "cors";
+import multer from "multer";
+import { PDFDocument } from "pdf-lib";
+import fs from "fs";
 
 const app = express();
 const upload = multer({ dest: "uploads/" });
-const PORT = process.env.PORT || 3000;
 
-app.get("/", (req, res) => {
-  res.send("✅ PDF Locker Backend Running...");
-});
+// ✅ Enable CORS for all origins
+app.use(cors({ origin: "*" }));
 
-app.post("/lock", upload.single("pdf"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).send("❌ No PDF uploaded");
-  }
-
-  const password = req.body.password;
-  if (!password) {
-    return res.status(400).send("❌ Password required");
-  }
-
-  const inputPath = req.file.path;
-  const outputPath = path.join("uploads", `locked-${Date.now()}.pdf`);
-
-  // qpdf command for password protection
-  const cmd = `qpdf --encrypt ${password} ${password} 256 -- ${inputPath} ${outputPath}`;
-
-  exec(cmd, (err) => {
-    if (err) {
-      console.error("Encryption error:", err);
-      return res.status(500).send("❌ Error encrypting PDF");
+// PDF Lock route
+app.post("/lock-pdf", upload.single("pdf"), async (req, res) => {
+  try {
+    const password = req.body.password;
+    if (!password || !req.file) {
+      return res.status(400).send("PDF file and password are required.");
     }
 
-    res.download(outputPath, "locked.pdf", (downloadErr) => {
-      if (downloadErr) {
-        console.error("Download error:", downloadErr);
-      }
+    const pdfBytes = fs.readFileSync(req.file.path);
 
-      // cleanup
-      fs.unlinkSync(inputPath);
-      fs.unlinkSync(outputPath);
+    // Load existing PDF and encrypt
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+    pdfDoc.encrypt({
+      userPassword: password,
+      ownerPassword: password,
+      permissions: {
+        printing: "highResolution",
+        modifying: false,
+        copying: false,
+        annotating: false,
+        fillingForms: false,
+        contentAccessibility: false,
+        documentAssembly: false,
+      },
     });
-  });
+
+    const lockedPdfBytes = await pdfDoc.save();
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": "attachment; filename=locked.pdf",
+    });
+
+    res.send(Buffer.from(lockedPdfBytes));
+  } catch (err) {
+    console.error("Error locking PDF:", err);
+    res.status(500).send("Failed to lock PDF: " + err.message);
+  }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+// Start server
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`Server running on port ${port}`));
